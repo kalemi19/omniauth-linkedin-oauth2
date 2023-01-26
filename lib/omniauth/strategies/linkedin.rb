@@ -8,22 +8,23 @@ module OmniAuth
       option :client_options, {
         :site => 'https://api.linkedin.com',
         :authorize_url => 'https://www.linkedin.com/oauth/v2/authorization?response_type=code',
-        :token_url => 'https://www.linkedin.com/oauth/v2/accessToken'
+        :token_url => 'https://www.linkedin.com/oauth/v2/accessToken',
+        :jwks_uri => 'https://www.linkedin.com/oauth/openid/jwks'
       }
 
-      option :scope, 'r_liteprofile r_emailaddress'
-      option :fields, ['id', 'first-name', 'last-name', 'picture-url', 'email-address']
+      option :scope, 'openid profile email'
+      option :fields, %w[id first-name last-name picture-url email-address]
 
       uid do
-        raw_info['id']
+        raw_info['sub']
       end
 
       info do
         {
-          :email => email_address,
-          :first_name => localized_field('firstName'),
-          :last_name => localized_field('lastName'),
-          :picture_url => picture_url
+          :email => raw_info['email'],
+          :first_name => raw_info['given_name'],
+          :last_name => raw_info['family_name'],
+          :picture_url => raw_info['picture']
         }
       end
 
@@ -48,15 +49,20 @@ module OmniAuth
       end
 
       def raw_info
-        @raw_info ||= access_token.get(profile_endpoint).parsed
+        @raw_info ||= get_user_data(oauth2_access_token.params['id_token'])
       end
 
       private
 
+      def get_user_data(id_token)
+        jwks_keys = JSON.parse(access_token.get(options.client_options.jwks_uri).body)
+        jwk = JWT::JWK.import(jwks_keys['keys'][0])
+        JWT.decode(id_token, jwk.public_key, true, { algorithm: 'RS256' })[0]
+      end
+
       def email_address
         if options.fields.include? 'email-address'
-          fetch_email_address
-          parse_email_address
+          raw_info['email']
         end
       end
 
@@ -79,10 +85,11 @@ module OmniAuth
 
       def fields_mapping
         {
-          'id' => 'id',
-          'first-name' => 'firstName',
-          'last-name' => 'lastName',
-          'picture-url' => 'profilePicture(displayImage~:playableStreams)'
+          'id' => 'sub',
+          'first-name' => 'given_name',
+          'last-name' => 'family_name',
+          'picture-url' => 'picture',
+          'email-address' => 'email'
         }
       end
 
@@ -122,7 +129,7 @@ module OmniAuth
       end
 
       def profile_endpoint
-        "/v2/me?projection=(#{ fields.join(',') })"
+        "/v2/userinfo?fields=#{ fields.join(',') }"
       end
     end
   end
